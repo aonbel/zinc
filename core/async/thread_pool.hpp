@@ -1,43 +1,29 @@
 #pragma once
 
 #include <atomic>
-#include <memory>
 #include <set>
 #include <thread>
 #include <vector>
 
 namespace zinc::core::async {
 
-class WorkItem : public std::enable_shared_from_this<WorkItem> {
+class WorkItem {
 public:
-  virtual ~WorkItem() {};
+  virtual ~WorkItem() = default;
   virtual void Resume() = 0;
   virtual bool Completed() const noexcept = 0;
+  virtual void Destroy() = 0;
 
-  std::shared_ptr<WorkItem> GetPtrFromThis() { return shared_from_this(); }
-
-  void AddDependency(const std::shared_ptr<WorkItem> &dependency) {
+  void AddDependency(WorkItem *dependency) {
     dependencies_.insert(dependency);
 
-    dependency->dependets_.insert(GetPtrFromThis());
+    dependency->dependets_.insert(this);
   }
 
-  void AddDependency(std::shared_ptr<WorkItem> &&dependency) {
-    dependencies_.insert(std::move(dependency));
-
-    dependency->dependets_.insert(GetPtrFromThis());
-  }
-
-  void RemoveDependency(const std::shared_ptr<WorkItem> &dependency) {
+  void RemoveDependency(WorkItem *dependency) {
     dependencies_.erase(dependency);
 
-    dependency->dependets_.erase(GetPtrFromThis());
-  }
-
-  void RemoveDependency(std::shared_ptr<WorkItem> &&dependency) {
-    dependencies_.erase(dependency);
-
-    dependency->dependets_.erase(GetPtrFromThis());
+    dependency->dependets_.erase(this);
   }
 
   size_t GetDependenciesCount() const { return dependencies_.size(); }
@@ -45,8 +31,8 @@ public:
   size_t GetDependentsCount() const { return dependets_.size(); }
 
 protected:
-  std::set<std::shared_ptr<WorkItem>> dependencies_;
-  std::set<std::shared_ptr<WorkItem>> dependets_;
+  std::set<WorkItem *> dependencies_;
+  std::set<WorkItem *> dependets_;
 };
 
 class ThreadPool {
@@ -66,21 +52,44 @@ public:
 
   private:
     void Cycle() {
-      while (enabled_.load()) {
-        size_t head_buf = pool_->items_head_ptr_.load();
-        std::shared_ptr<WorkItem> item_ptr = pool_->items_[head_buf];
+      while (true) {
+        size_t tail_reserve_buf = pool_->items_reserve_tail_ptr_.load();
 
-        while (head_buf == pool_->items_tail_ptr_.load() ||
-               !pool_->items_head_ptr_.compare_exchange_weak(head_buf,
-                                                             head_buf + 1)) {
-          head_buf = pool_->items_head_ptr_.load();
-          item_ptr = pool_->items_[head_buf];
+        while (true) {
+          if (!enabled_.load()) {
+            return;
+          }
+
+          if (tail_reserve_buf == pool_->items_release_head_ptr_.load()) {
+            tail_reserve_buf = pool_->items_reserve_tail_ptr_.load();
+
+            continue;
+          }
+
+          if (pool_->items_reserve_tail_ptr_.compare_exchange_weak(
+                  tail_reserve_buf,
+                  (tail_reserve_buf + 1) % pool_->buffer_size_)) {
+            break;
+          }
         }
 
-        pool_->items_[head_buf].reset();
+        WorkItem *work_item_ptr = pool_->work_items_[tail_reserve_buf];
+        pool_->work_items_[tail_reserve_buf] = nullptr;
 
-        if (item_ptr->GetDependenciesCount() == 0) {
-          item_ptr->Resume();
+        size_t expected_tail_release = tail_reserve_buf;
+
+        while (!pool_->items_release_tail_ptr_.compare_exchange_weak(
+            expected_tail_release,
+            (expected_tail_release + 1) % pool_->buffer_size_)) {
+          expected_tail_release = tail_reserve_buf;
+        }
+
+        if (work_item_ptr->GetDependenciesCount() == 0) {
+          work_item_ptr->Resume();
+        }
+
+        if (!work_item_ptr->Completed()) {
+          pool_->Submit(work_item_ptr);
         }
       }
     }
@@ -92,7 +101,7 @@ public:
   };
 
   ThreadPool(size_t workers_count) : workers_count_(workers_count) {
-    items_ = std::vector<std::shared_ptr<WorkItem>>(buffer_size_);
+    work_items_ = std::vector<WorkItem *>(buffer_size_);
 
     workers_.reserve(workers_count_);
     for (size_t i = 0; i < workers_count; i++) {
@@ -104,28 +113,49 @@ public:
     for (auto &worker : workers_) {
       worker->Disable();
     }
+
+    for (auto &work_item : work_items_) {
+      if (work_item) {
+        work_item->Destroy();
+      }
+    }
   }
 
-  void Submit(std::shared_ptr<WorkItem> item) {
-    size_t tail_buf = items_tail_ptr_.load();
+  void Submit(WorkItem *item) {
+    size_t head_reserve_buf = items_reserve_head_ptr_.load();
 
-    while ((tail_buf + 1) % buffer_size_ == items_head_ptr_.load() ||
-           items_[tail_buf] != nullptr ||
-           !items_tail_ptr_.compare_exchange_weak(tail_buf, (tail_buf + 1) %
-                                                                buffer_size_)) {
-      tail_buf = items_tail_ptr_.load();
+    while (true) {
+      if ((head_reserve_buf + 1) % buffer_size_ ==
+          items_release_tail_ptr_.load()) {
+        head_reserve_buf = items_reserve_head_ptr_.load();
+
+        continue;
+      }
+
+      if (items_reserve_head_ptr_.compare_exchange_weak(
+              head_reserve_buf, (head_reserve_buf + 1) % buffer_size_)) {
+        break;
+      }
     }
 
-    size_t insert_pos = (tail_buf + buffer_size_ - 1) % buffer_size_;
-    items_[insert_pos] = item;
+    work_items_[head_reserve_buf] = item;
+
+    size_t expected_head_release = head_reserve_buf;
+
+    while (!items_release_head_ptr_.compare_exchange_weak(
+        expected_head_release, (expected_head_release + 1) % buffer_size_)) {
+      expected_head_release = head_reserve_buf;
+    }
   }
 
 private:
   std::vector<std::unique_ptr<Worker>> workers_{};
 
-  std::vector<std::shared_ptr<WorkItem>> items_;
-  std::atomic_uint64_t items_head_ptr_{};
-  std::atomic_uint64_t items_tail_ptr_{};
+  std::vector<WorkItem *> work_items_;
+  std::atomic_uint64_t items_reserve_head_ptr_{};
+  std::atomic_uint64_t items_release_head_ptr_{};
+  std::atomic_uint64_t items_reserve_tail_ptr_{};
+  std::atomic_uint64_t items_release_tail_ptr_{};
 
   const size_t workers_count_ = 4;
   const size_t buffer_size_ = 1024;

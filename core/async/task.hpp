@@ -1,7 +1,7 @@
 #pragma once
 
 #include <coroutine>
-#include <memory>
+#include <iostream>
 #include <utility>
 
 #include "thread_pool.hpp"
@@ -14,90 +14,83 @@ template <class T> class Task {
 public:
   using promise_type = PromiseFor<T>;
 
-  explicit Task(std::coroutine_handle<PromiseFor<T>> handler)
-      : handler_(handler) {}
+  explicit Task(std::coroutine_handle<PromiseFor<T>> handle)
+      : handle_(handle) {}
 
   void Resume();
 
   bool Completed();
 
-  const T &Result() const { return handler_.promise().Result(); }
+  WorkItem *WorkItem();
 
-  T &&Result() { return std::move(handler_.promise().Result()); }
+  const T &Result() const { return handle_.promise().Result(); }
+
+  T &&Result() { return std::move(handle_.promise().Result()); }
 
   constexpr bool await_ready() const noexcept { return false; }
 
   template <class U>
-  constexpr void
-  await_suspend(std::coroutine_handle<PromiseFor<U>> handle) const noexcept {
-    PromiseFor<U> &promise = handle.promise();
-
-    promise.AddDependency(handler_.promise().GetPtrFromThis());
-  }
+  void
+  await_suspend(std::coroutine_handle<PromiseFor<U>> handle) const noexcept;
 
   constexpr const T &await_resume() const noexcept { return Result(); }
 
 private:
-  std::coroutine_handle<PromiseFor<T>> handler_;
+  std::coroutine_handle<PromiseFor<T>> handle_;
 };
 
 template <> class Task<void> {
 public:
   using promise_type = PromiseFor<void>;
 
-  explicit Task(std::coroutine_handle<PromiseFor<void>> handler)
-      : handler_(handler) {}
+  explicit Task(std::coroutine_handle<PromiseFor<void>> handle)
+      : handle_(handle) {}
 
   void Resume();
 
   bool Completed();
 
+  WorkItem *WorkItem();
+
   constexpr bool await_ready() const noexcept { return false; }
 
   template <class U>
-  constexpr void
-  await_suspend(std::coroutine_handle<PromiseFor<U>> handle) const noexcept {
-    PromiseFor<U> &promise = handle.promise();
-
-    promise.AddDependency(handler_.promise().GetPtrFromThis());
-  }
+  void
+  await_suspend(std::coroutine_handle<PromiseFor<U>> handle) const noexcept;
 
   constexpr void await_resume() const noexcept {}
 
 private:
-  std::coroutine_handle<PromiseFor<void>> handler_;
+  std::coroutine_handle<PromiseFor<void>> handle_;
 };
 
 template <class T> class PromiseFor : public WorkItem {
 public:
   PromiseFor<T>()
-      : handler_(std::coroutine_handle<PromiseFor<T>>::from_promise(*this)),
-        task_global_thread_pool_(global_thread_pool) {}
+      : handler_(std::coroutine_handle<PromiseFor<T>>::from_promise(*this)) {}
 
   Task<T> get_return_object() { return Task<T>{handler_}; }
 
   std::suspend_always initial_suspend() noexcept { return {}; }
-  std::suspend_never final_suspend() noexcept { return {}; }
+  std::suspend_always final_suspend() noexcept { return {}; }
 
   void unhandled_exception() {}
 
-  void Resume() override {
-    ThreadPoolContext ctx{task_global_thread_pool_};
-
-    handler_.resume();
-
-    task_global_thread_pool_ = global_thread_pool;
-  }
+  void Resume() override { handler_.resume(); }
 
   bool Completed() const noexcept override { return completed_; }
+
+  void Destroy() override { handler_.destroy(); }
 
   const T &Result() const { return result_; }
 
   T &&Result() { return std::move(result_); }
 
   void return_value(T value) {
-    for (auto &dependent : dependets_) {
-      dependent->RemoveDependency(GetPtrFromThis());
+    auto dependents_copy_ = dependets_;
+
+    for (auto &dependent : dependents_copy_) {
+      dependent->RemoveDependency(this);
     }
 
     completed_ = true;
@@ -106,7 +99,6 @@ public:
 
 private:
   std::coroutine_handle<PromiseFor<T>> handler_;
-  ThreadPool *task_global_thread_pool_;
   bool completed_{};
   T result_;
 };
@@ -114,29 +106,27 @@ private:
 template <> class PromiseFor<void> : public WorkItem {
 public:
   PromiseFor<void>()
-      : handler_(std::coroutine_handle<PromiseFor<void>>::from_promise(*this)),
-        task_global_thread_pool_(global_thread_pool) {}
+      : handler_(std::coroutine_handle<PromiseFor<void>>::from_promise(*this)) {
+  }
 
   Task<void> get_return_object() { return Task<void>{handler_}; }
 
   std::suspend_always initial_suspend() noexcept { return {}; }
-  std::suspend_never final_suspend() noexcept { return {}; }
+  std::suspend_always final_suspend() noexcept { return {}; }
 
   void unhandled_exception() {}
 
-  void Resume() override {
-    ThreadPoolContext ctx{task_global_thread_pool_};
-
-    handler_.resume();
-
-    task_global_thread_pool_ = global_thread_pool;
-  }
+  void Resume() override { handler_.resume(); }
 
   bool Completed() const noexcept override { return completed_; }
 
+  void Destroy() override { handler_.destroy(); }
+
   void return_void() {
-    for (auto &dependent : dependets_) {
-      dependent->RemoveDependency(GetPtrFromThis());
+    auto dependents_copy_ = dependets_;
+
+    for (auto &dependent : dependents_copy_) {
+      dependent->RemoveDependency(this);
     }
 
     completed_ = true;
@@ -144,7 +134,48 @@ public:
 
 private:
   std::coroutine_handle<PromiseFor<void>> handler_;
-  ThreadPool *task_global_thread_pool_;
   bool completed_{};
 };
+
+template <class T>
+template <class U>
+void zinc::core::async::Task<T>::await_suspend(
+    std::coroutine_handle<PromiseFor<U>> handle) const noexcept {
+  PromiseFor<U> &dependent_promise = handle.promise();
+  PromiseFor<T> &dependency_promise = handle_.promise();
+
+  auto dependency_work_item_ptr = &dependency_promise;
+
+  dependent_promise.AddDependency(dependency_work_item_ptr);
+
+  if (global_thread_pool) {
+    global_thread_pool->Submit(dependency_work_item_ptr);
+  } else {
+    // TODO logger
+
+    std::cerr << "No global thread pool allocated for task "
+              << dependency_work_item_ptr << "\n";
+  }
+}
+
+template <class U>
+void zinc::core::async::Task<void>::await_suspend(
+    std::coroutine_handle<PromiseFor<U>> handle) const noexcept {
+  PromiseFor<U> &dependent_promise = handle.promise();
+  PromiseFor<void> &dependency_promise = handle_.promise();
+
+  auto dependency_work_item_ptr = &dependency_promise;
+
+  dependent_promise.AddDependency(dependency_work_item_ptr);
+
+  if (global_thread_pool) {
+    global_thread_pool->Submit(dependency_work_item_ptr);
+  } else {
+    // TODO logger
+
+    std::cerr << "No global thread pool allocated for task "
+              << dependency_work_item_ptr << "\n";
+  }
+}
+
 } // namespace zinc::core::async
