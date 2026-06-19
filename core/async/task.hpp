@@ -93,8 +93,11 @@ public:
       dependent->RemoveDependency(this);
     }
 
-    completed_ = true;
     result_ = std::move(value);
+
+    completed_ = true;
+
+    OnComplete();
   }
 
 private:
@@ -130,6 +133,8 @@ public:
     }
 
     completed_ = true;
+
+    OnComplete();
   }
 
 private:
@@ -145,14 +150,32 @@ void zinc::core::async::Task<T>::await_suspend(
   PromiseFor<T> &dependency_promise = handle_.promise();
 
   auto dependency_work_item_ptr = &dependency_promise;
+  auto dependent_work_item_ptr = &dependent_promise;
 
   dependent_promise.AddDependency(dependency_work_item_ptr);
+
+  dependency_promise.AddCompletionCallback([dependent_work_item_ptr] {
+    if (dependent_work_item_ptr->GetDependenciesCount() != 0) {
+      return;
+    }
+
+    // TODO get right pool
+    auto global_thread_pool = GetGlobalThreadPool();
+    if (global_thread_pool) {
+      global_thread_pool->Submit(dependent_work_item_ptr);
+    } else {
+      // TODO logger
+      std::cerr << "No global thread pool allocated for task "
+                << dependent_work_item_ptr << "\n";
+    }
+  });
+
+  auto global_thread_pool = GetGlobalThreadPool();
 
   if (global_thread_pool) {
     global_thread_pool->Submit(dependency_work_item_ptr);
   } else {
     // TODO logger
-
     std::cerr << "No global thread pool allocated for task "
               << dependency_work_item_ptr << "\n";
   }
@@ -165,14 +188,32 @@ void zinc::core::async::Task<void>::await_suspend(
   PromiseFor<void> &dependency_promise = handle_.promise();
 
   auto dependency_work_item_ptr = &dependency_promise;
+  auto dependent_work_item_ptr = &dependent_promise;
 
   dependent_promise.AddDependency(dependency_work_item_ptr);
+
+  dependency_promise.AddCompletionCallback([dependent_work_item_ptr] {
+    if (dependent_work_item_ptr->GetDependenciesCount() != 0) {
+      return;
+    }
+
+    // TODO get right pool
+    auto global_thread_pool = GetGlobalThreadPool();
+    if (global_thread_pool) {
+      global_thread_pool->Submit(dependent_work_item_ptr);
+    } else {
+      // TODO logger
+      std::cerr << "No global thread pool allocated for task "
+                << dependent_work_item_ptr << "\n";
+    }
+  });
+
+  auto global_thread_pool = GetGlobalThreadPool();
 
   if (global_thread_pool) {
     global_thread_pool->Submit(dependency_work_item_ptr);
   } else {
     // TODO logger
-
     std::cerr << "No global thread pool allocated for task "
               << dependency_work_item_ptr << "\n";
   }

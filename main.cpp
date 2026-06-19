@@ -1,3 +1,4 @@
+#include "core/async/awaiters/duration.hpp"
 #include "core/async/task.hpp"
 #include "core/async/thread_pool_context.hpp"
 #include <chrono>
@@ -34,9 +35,11 @@ Task<void> f() {
 
 Task<void> f2() {
   while (true) {
+    using namespace std::chrono_literals;
+
     std::cout << global << '\n';
 
-    co_await pass();
+    co_await 1s;
   }
 }
 
@@ -46,8 +49,8 @@ int main() {
   auto task1 = f();
   auto task2 = f2();
 
-  global_thread_pool->Submit(task1.WorkItem());
-  global_thread_pool->Submit(task2.WorkItem());
+  GetGlobalThreadPool()->Submit(task1.WorkItem());
+  GetGlobalThreadPool()->Submit(task2.WorkItem());
 
   std::this_thread::sleep_for(std::chrono::seconds(30));
 }

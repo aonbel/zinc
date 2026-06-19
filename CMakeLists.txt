@@ -9,7 +9,8 @@ add_compile_options(-fcoroutines)
 
 # ///
 
-set(ZINC_SOURCE core/async/task.cpp)
+set(ZINC_SOURCE core/async/task.cpp
+core/async/thread_pool.cpp)
 
 add_library(zinc STATIC ${ZINC_SOURCE})
 
