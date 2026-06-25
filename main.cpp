@@ -1,56 +1,30 @@
-#include "core/async/awaiters/duration.hpp"
-#include "core/async/task.hpp"
+#include <memory>
 #include "core/async/thread_pool_context.hpp"
-#include <chrono>
-#include <iostream>
-#include <thread>
+#include "core/node/node_manager.hpp"
+#include "nodes/epoll_node/epoll_node.hpp"
 
-using namespace zinc::core::async;
+using namespace std::chrono_literals;
+using zinc::core::async::SubmitToGlobalThreadPool;
+using zinc::core::async::Task;
+using zinc::core::async::ThreadPoolContext;
+using zinc::core::node::NodeManager;
+using zinc::nodes::epoll_node::EpollNode;
 
-int global = 0;
+NodeManager node_manager;
 
-Task<void> pass() { co_return; }
-
-Task<int> compute_int() {
-  int result = 0;
-
-  for (int i = 0; i < 1000000000; i++) {
-    if (i % 2) {
-      result++;
-    }
-  }
-
-  co_return result;
-}
-
-Task<void> f() {
-  while (true) {
-    auto result = co_await compute_int();
-
-    std::cout << result << '\n';
-
-    global++;
-  }
-}
-
-Task<void> f2() {
-  while (true) {
-    using namespace std::chrono_literals;
-
-    std::cout << global << '\n';
-
-    co_await 1s;
-  }
+Task<void> MainTask() {
+    co_await node_manager.Init();
+    co_await node_manager.Run();
 }
 
 int main() {
-  ThreadPoolContext ctx{4};
+    ThreadPoolContext ctx{4};
+    auto epoll_node_ptr = std::make_shared<EpollNode>(8080);
+    node_manager.AddManagedNode(epoll_node_ptr);
 
-  auto task1 = f();
-  auto task2 = f2();
+    epoll_node_ptr->AddSubscriber<zinc::nodes::epoll_node::ClientDataT*>(epoll_node_ptr);
 
-  GetGlobalThreadPool()->Submit(task1.WorkItem());
-  GetGlobalThreadPool()->Submit(task2.WorkItem());
+    SubmitToGlobalThreadPool(MainTask().WorkItem());
 
-  std::this_thread::sleep_for(std::chrono::seconds(30));
+    std::this_thread::sleep_for(300s);
 }
