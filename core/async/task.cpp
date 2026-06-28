@@ -7,7 +7,7 @@ void zinc::core::async::Task<T>::Resume() {
 
 template <class T>
 bool zinc::core::async::Task<T>::Completed() {
-    handle_.promise().Completed();
+    return handle_.promise().Completed();
 }
 
 template <class T>
