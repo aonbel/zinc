@@ -28,6 +28,8 @@ include_directories("include")
 
 add_library(zinc STATIC ${ZINC_SOURCE})
 
+enable_testing()
+
 add_subdirectory(external/googletest)
 
 option(ENABLE_TSAN "Enable ThreadSanitizer" ON)
