@@ -4,16 +4,18 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <unordered_map>
+#include <asm-generic/socket.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/epoll.h>
 #include <netinet/in.h>
 
-#include "../../core/async/task.hpp"
-#include "../../core/utility/meta.hpp"
-#include "../../core/node/node.hpp"
-#include "../../core/async/awaiters/duration.hpp"
+#include "core/async/task.hpp"
+#include "core/utility/meta.hpp"
+#include "core/node/node.hpp"
+#include "core/async/awaiters/duration.hpp"
 
 namespace zinc::nodes::epoll_node {
 
@@ -31,24 +33,30 @@ struct ClientDataT {
     std::vector<uint8_t> data;
 };
 
-struct EpollNode : zinc::core::node::Node<ClassList<ClientDataT *>, ClassList<ClientDataT *>> {
+// TODO add move, copy, and pointer inlets and outlets support
+
+struct EpollNode : zinc::core::node::Node<ClassList<ClientDataT>, ClassList<ClientDataT>> {
 
     struct ClientContextT {
         sockaddr_in addr;
+
         std::queue<std::vector<uint8_t>> data;
     };
 
     EpollNode(uint16_t port, int backlog = 5, int epoll_flags = 0,
               size_t epoll_events_buffer_size = 64, int epoll_timeout = 0,
               size_t epollin_event_buffer_size = 1024,
-              std::chrono::milliseconds epoll_event_loop_delay = 10ms)
+              std::chrono::milliseconds epoll_event_loop_delay = 0ms, int reuseaddr = 1,
+              int reuseport = 1)
         : port_(port),
           backlog_(backlog),
           epoll_flags_(epoll_flags),
           epoll_events_buffer_size_(epoll_events_buffer_size),
           epoll_timeout_(epoll_timeout),
           epollin_event_buffer_size_(epollin_event_buffer_size),
-          epoll_event_loop_delay_(epoll_event_loop_delay) {
+          epoll_event_loop_delay_(epoll_event_loop_delay),
+          reuseaddr_(reuseaddr),
+          reuseport_(reuseport) {
         if (epoll_events_buffer_size == 0) {
             std::cerr << "events buffer size should be positive\n";
             exit(EXIT_FAILURE);
@@ -60,14 +68,6 @@ struct EpollNode : zinc::core::node::Node<ClassList<ClientDataT *>, ClassList<Cl
             std::cerr << "epollin event buffer size should be positive\n";
             exit(EXIT_FAILURE);
         }
-
-        epollin_event_buffer_.resize(epollin_event_buffer_size_);
-
-        client_data_buffer_ptr_ = new ClientDataT;
-    }
-
-    ~EpollNode() {
-        delete client_data_buffer_ptr_;
     }
 
     Task<void> OnInit() override {
@@ -75,6 +75,20 @@ struct EpollNode : zinc::core::node::Node<ClassList<ClientDataT *>, ClassList<Cl
 
         if (main_socket_fd_ < 0) {
             std::cerr << "unable to create main socket[" << errno << "]\n";
+            exit(EXIT_FAILURE);
+        }
+
+        if (reuseaddr_ && setsockopt(main_socket_fd_, SOL_SOCKET, SO_REUSEADDR, &reuseaddr_,
+                                     sizeof(reuseaddr_)) < 0) {
+
+            std::cerr << "unable to set reuseaddr option to main socket[" << errno << "]\n";
+            exit(EXIT_FAILURE);
+        }
+
+        if (reuseport_ && setsockopt(main_socket_fd_, SOL_SOCKET, SO_REUSEPORT, &reuseport_,
+                                     sizeof(reuseport_)) < 0) {
+
+            std::cerr << "unable to set reuseport option to main socket[" << errno << "]\n";
             exit(EXIT_FAILURE);
         }
 
@@ -115,19 +129,27 @@ struct EpollNode : zinc::core::node::Node<ClassList<ClientDataT *>, ClassList<Cl
     }
 
     Task<void> OnStart() override {
-        SubmitToGlobalThreadPool(EventLoop().WorkItem());
+        auto loop = EventLoop();
+
+        SubmitToGlobalThreadPool(loop);
 
         co_return;
     }
 
-    Task<void> operator()(ClientDataT *data) override {
-        client_fd_to_context_[data->fd].data.push(std::move(data->data));
+    Task<void> operator()(ClientDataT data) override {
+        auto &client_context = client_fd_to_context_[data.fd];
+
+        {
+            std::unique_lock lg(messages_mutex_);
+
+            client_context.data.push(std::move(data.data));
+        }
 
         epoll_event client_socket_event;
         client_socket_event.events = EPOLLIN | EPOLLOUT;
-        client_socket_event.data.fd = data->fd;
+        client_socket_event.data.fd = data.fd;
 
-        epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, data->fd, &client_socket_event);
+        epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, data.fd, &client_socket_event);
 
         co_return;
     }
@@ -163,7 +185,11 @@ private:
 
                     epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, client_fd, &client_socket_event);
                 } else if (event.events & EPOLLIN) {
-                    ssize_t data_size = read(event.data.fd, epollin_event_buffer_.data(),
+                    ClientDataT client_data_buffer{
+                        event.data.fd, client_fd_to_context_[event.data.fd].addr,
+                        std::vector<uint8_t>(epollin_event_buffer_size_)};
+
+                    ssize_t data_size = read(event.data.fd, client_data_buffer.data.data(),
                                              epollin_event_buffer_size_);
 
                     if (data_size == -1) {
@@ -178,37 +204,36 @@ private:
                         continue;
                     }
 
-                    // TODO remove copy
+                    auto next = Next(client_data_buffer);
 
-                    client_data_buffer_ptr_->data = {epollin_event_buffer_.begin(),
-                                                     epollin_event_buffer_.begin() + data_size};
-                    client_data_buffer_ptr_->addr = client_fd_to_context_[event.data.fd].addr;
-                    client_data_buffer_ptr_->fd = event.data.fd;
-
-                    SubmitToGlobalThreadPool(Next(client_data_buffer_ptr_).WorkItem());
+                    SubmitToGlobalThreadPool(next);
                 } else if (event.events & EPOLLOUT) {
                     int client_fd = event.data.fd;
 
                     auto &context = client_fd_to_context_[client_fd];
 
-                    auto &data_to_write = context.data.front();
+                    {
+                        std::unique_lock lg(messages_mutex_);
 
-                    size_t written_size =
-                        write(client_fd, data_to_write.data(), data_to_write.size());
+                        auto &data_to_write = context.data.front();
 
-                    if (written_size < data_to_write.size()) {
-                        data_to_write.erase(data_to_write.begin(),
-                                            data_to_write.begin() + written_size);
-                    } else {
-                        context.data.pop();
-                    }
+                        size_t written_size =
+                            write(client_fd, data_to_write.data(), data_to_write.size());
 
-                    if (context.data.empty()) {
-                        epoll_event client_socket_event;
-                        client_socket_event.events = EPOLLIN;
-                        client_socket_event.data.fd = client_fd;
+                        if (written_size < data_to_write.size()) {
+                            data_to_write.erase(data_to_write.begin(),
+                                                data_to_write.begin() + written_size);
+                        } else {
+                            context.data.pop();
+                        }
 
-                        epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, client_fd, &client_socket_event);
+                        if (context.data.empty()) {
+                            epoll_event client_socket_event;
+                            client_socket_event.events = EPOLLIN;
+                            client_socket_event.data.fd = client_fd;
+
+                            epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, client_fd, &client_socket_event);
+                        }
                     }
                 } else {
                     std::cerr << "unknown event\n";
@@ -226,10 +251,9 @@ private:
 
     int epoll_fd_;
     std::vector<epoll_event> epoll_events_buffer_;
-    std::vector<uint8_t> epollin_event_buffer_;
+    std::mutex messages_mutex_;
 
     std::unordered_map<int, ClientContextT> client_fd_to_context_;
-    ClientDataT *client_data_buffer_ptr_;
 
     const uint16_t port_;
     const int backlog_;
@@ -238,5 +262,7 @@ private:
     const int epoll_timeout_;
     const size_t epollin_event_buffer_size_;
     const std::chrono::milliseconds epoll_event_loop_delay_;
+    const int reuseaddr_;
+    const int reuseport_;
 };
 }  // namespace zinc::nodes::epoll_node

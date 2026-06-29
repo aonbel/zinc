@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../defaults.hpp"
+#include "core/defaults.hpp"
 #include "thread_pool.hpp"
 #include <iostream>
 #include <type_traits>
@@ -25,8 +25,22 @@ static constexpr ThreadPool<ClockT> *GetGlobalThreadPool() {
 }
 
 template <class ClockT = ::core::defaults::ClockT>
-static constexpr void SubmitToGlobalThreadPool(WorkItem *work_item_ptr) {
-    if constexpr (std::is_same_v<ClockT, ::core::defaults::ClockT>) {
+static void SubmitToGlobalThreadPool(ThreadPoolSubmittable &&work_item_ptr) {
+    if (std::is_same_v<ClockT, ::core::defaults::ClockT>) {
+        internal::global_thread_pool->Submit(std::move(work_item_ptr));
+
+        return;
+    }
+
+    // TODO smth with global pools
+
+    std::cerr << "Currently unsupported global thread pool type "
+              << typeid(ThreadPool<ClockT>).name() << "\n";
+}
+
+template <class ClockT = ::core::defaults::ClockT>
+static void SubmitToGlobalThreadPool(ThreadPoolSubmittable &work_item_ptr) {
+    if (std::is_same_v<ClockT, ::core::defaults::ClockT>) {
         internal::global_thread_pool->Submit(work_item_ptr);
 
         return;
@@ -36,8 +50,20 @@ static constexpr void SubmitToGlobalThreadPool(WorkItem *work_item_ptr) {
 
     std::cerr << "Currently unsupported global thread pool type "
               << typeid(ThreadPool<ClockT>).name() << "\n";
+}
 
-    return;
+template <class ClockT = ::core::defaults::ClockT>
+static void SubmitToGlobalThreadPool(std::shared_ptr<ThreadPoolSubmittable> work_item_ptr) {
+    if (std::is_same_v<ClockT, ::core::defaults::ClockT>) {
+        internal::global_thread_pool->Submit(work_item_ptr);
+
+        return;
+    }
+
+    // TODO smth with global pools
+
+    std::cerr << "Currently unsupported global thread pool type "
+              << typeid(ThreadPool<ClockT>).name() << "\n";
 }
 
 template <class Clock = ::core::defaults::ClockT>

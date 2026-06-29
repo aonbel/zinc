@@ -1,7 +1,9 @@
 #pragma once
 
+#include <atomic>
 #include <coroutine>
 #include <iostream>
+#include <memory>
 #include <utility>
 
 #include "thread_pool.hpp"
@@ -12,18 +14,27 @@ template <class T>
 class PromiseFor;
 
 template <class T>
-class Task {
+class Task : public ThreadPoolSubmittable {
 public:
     using promise_type = PromiseFor<T>;
 
-    explicit Task(std::coroutine_handle<PromiseFor<T>> handle) : handle_(handle) {
+    explicit Task(std::coroutine_handle<PromiseFor<T>> handle) {
+        handle_ = handle;
+
+        work_item_ptr_ = handle.promise().GetWorkItemPtr();
     }
 
-    void Resume();
+    ~Task() {
+        work_item_ptr_->TryDestroy(work_item_ptr_);
+    };
 
-    bool Completed();
+    void Resume() {
+        handle_.promise().Resume();
+    }
 
-    WorkItem *WorkItem();
+    bool Completed() {
+        handle_.promise().Completed();
+    }
 
     const T &Result() const {
         return handle_.promise().Result();
@@ -45,22 +56,29 @@ public:
     }
 
 private:
+    WorkItemPtrT GetWorkItemPtr() override {
+        return work_item_ptr_;
+    }
+
     std::coroutine_handle<PromiseFor<T>> handle_;
+
+    WorkItemPtrT work_item_ptr_;
 };
 
 template <>
-class Task<void> {
+class Task<void> : public ThreadPoolSubmittable {
 public:
     using promise_type = PromiseFor<void>;
 
-    explicit Task(std::coroutine_handle<PromiseFor<void>> handle) : handle_(handle) {
-    }
+    explicit Task(std::coroutine_handle<PromiseFor<void>> handle);
+
+    ~Task() {
+        work_item_ptr_->TryDestroy(work_item_ptr_);
+    };
 
     void Resume();
 
     bool Completed();
-
-    WorkItem *WorkItem();
 
     constexpr bool await_ready() const noexcept {
         return false;
@@ -73,13 +91,20 @@ public:
     }
 
 private:
+    WorkItemPtrT GetWorkItemPtr() override;
+
     std::coroutine_handle<PromiseFor<void>> handle_;
+
+    WorkItemPtrT work_item_ptr_;
 };
 
 template <class T>
 class PromiseFor : public WorkItem {
 public:
     PromiseFor<T>() : handler_(std::coroutine_handle<PromiseFor<T>>::from_promise(*this)) {
+    }
+
+    ~PromiseFor() {
     }
 
     Task<T> get_return_object() {
@@ -120,7 +145,7 @@ public:
         auto dependents_copy = dependets_;
 
         for (auto &dependent : dependents_copy) {
-            dependent->RemoveDependency(this);
+            dependent->RemoveDependency(GetWorkItemPtr());
         }
 
         result_ = std::move(value);
@@ -131,6 +156,7 @@ public:
     }
 
 private:
+    std::atomic_size_t task_counter_{};
     std::coroutine_handle<PromiseFor<T>> handler_;
     bool completed_{};
     T result_;
@@ -172,7 +198,7 @@ public:
         auto dependents_copy = dependets_;
 
         for (auto &dependent : dependents_copy) {
-            dependent->RemoveDependency(this);
+            dependent->RemoveDependency(GetWorkItemPtr());
         }
 
         completed_ = true;
@@ -181,6 +207,7 @@ public:
     }
 
 private:
+    std::atomic_size_t task_counter_{};
     std::coroutine_handle<PromiseFor<void>> handler_;
     bool completed_{};
 };
@@ -192,8 +219,8 @@ void zinc::core::async::Task<T>::await_suspend(
     PromiseFor<U> &dependent_promise = handle.promise();
     PromiseFor<T> &dependency_promise = handle_.promise();
 
-    auto dependency_work_item_ptr = &dependency_promise;
-    auto dependent_work_item_ptr = &dependent_promise;
+    auto dependency_work_item_ptr = dependency_promise.GetWorkItemPtr();
+    auto dependent_work_item_ptr = dependent_promise.GetWorkItemPtr();
 
     dependent_promise.AddDependency(dependency_work_item_ptr);
 
@@ -230,8 +257,8 @@ void zinc::core::async::Task<void>::await_suspend(
     PromiseFor<U> &dependent_promise = handle.promise();
     PromiseFor<void> &dependency_promise = handle_.promise();
 
-    auto dependency_work_item_ptr = &dependency_promise;
-    auto dependent_work_item_ptr = &dependent_promise;
+    auto dependency_work_item_ptr = dependency_promise.GetWorkItemPtr();
+    auto dependent_work_item_ptr = dependent_promise.GetWorkItemPtr();
 
     dependent_promise.AddDependency(dependency_work_item_ptr);
 

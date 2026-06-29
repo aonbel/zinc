@@ -1,8 +1,8 @@
 #pragma once
 
 #include <memory>
-#include "../async/task.hpp"
-#include "../utility/meta.hpp"
+#include "core/async/task.hpp"
+#include "core/utility/meta.hpp"
 #include "node_manager.hpp"
 
 namespace zinc::core::node {
