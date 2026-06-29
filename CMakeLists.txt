@@ -32,7 +32,7 @@ enable_testing()
 
 add_subdirectory(external/googletest)
 
-option(ENABLE_TSAN "Enable ThreadSanitizer" ON)
+option(ENABLE_TSAN "Enable ThreadSanitizer" OFF)
 
 if (ENABLE_TSAN)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=thread")

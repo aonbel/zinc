@@ -55,7 +55,7 @@ protected:
     std::set<WorkItemPtrT> dependets_{};
 
 private:
-    WorkItemPtrT work_item_ptr_{this, [](auto ptr) {}};
+    WorkItemPtrT work_item_ptr_{this, [](auto) {}};
 
     std::vector<std::function<void()>> complete_callbacks_{};
 };
