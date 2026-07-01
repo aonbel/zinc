@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <functional>
+#include <iostream>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -52,7 +53,6 @@ protected:
     std::mutex work_item_mtx_{};
 
     std::set<WorkItemPtrT> dependencies_{};
-    std::set<WorkItemPtrT> dependets_{};
 
 private:
     WorkItemPtrT work_item_ptr_{this, [](auto) {}};

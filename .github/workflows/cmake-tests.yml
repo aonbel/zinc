@@ -6,11 +6,13 @@ on:
   pull_request:
     branches: [ "main" ]
 
-env:
-  BUILD_TYPE: Release
-
 jobs:
   build:
+
+    strategy:
+      matrix:
+        PRESET: [ Release, Debug, SanCheck ]
+
     runs-on: ubuntu-latest
 
     steps:
@@ -18,22 +20,17 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Install Clang
+    - name: Install dependecies
       run: |
         sudo apt-get update
         sudo apt-get install -y clang-20 clang++-20
 
-    - name: Configure CMake with Clang
+    - name: Configure
       run: |
-        cmake -B ${{github.workspace}}/build \
-          -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-          -DCMAKE_C_COMPILER=clang-20 \
-          -DCMAKE_CXX_COMPILER=clang++-20 \
-          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+        cmake . --preset=${{matrix.PRESET}}
 
     - name: Build
-      run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}}
+      run: cmake --build . --preset=${{matrix.PRESET}}
 
     - name: Test
-      working-directory: ${{github.workspace}}/build
-      run: ctest -C ${{env.BUILD_TYPE}} --output-on-failure
+      run: ctest . --preset=${{matrix.PRESET}}

@@ -24,22 +24,29 @@ include/core/defaults.hpp
 include/nodes/epoll_node/epoll_node.hpp
 )
 
+add_library(zinc STATIC ${ZINC_SOURCE})
 include_directories("include")
 
-add_library(zinc STATIC ${ZINC_SOURCE})
+option(ENABLE_SAN "Enable sanitizers")
+
+if(ENABLE_SAN)
+    set(SANITIZERS_FLAGS "-fsanitize=address -fsanitize=undefined -fno-sanitize-recover=all -fsanitize=float-divide-by-zero -fsanitize=float-cast-overflow -fno-sanitize=null -fno-sanitize=alignment")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SANITIZERS_FLAGS}")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${SANITIZERS_FLAGS}")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${SANITIZERS_FLAGS}")
+    set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} ${SANITIZERS_FLAGS}")
+endif()
 
 enable_testing()
 
 add_subdirectory(external/googletest)
 
-option(ENABLE_TSAN "Enable ThreadSanitizer" OFF)
-
-if (ENABLE_TSAN)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=thread")
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=thread")
-    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fsanitize=thread")
-endif()
-
 add_subdirectory(test)
+
+option(ENABLE_EXAMPLE "Enable build of examples" ON)
+
+if (ENABLE_EXAMPLE)
+    add_subdirectory(example)
+endif()
 
 

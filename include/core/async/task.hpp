@@ -33,7 +33,7 @@ public:
     }
 
     bool Completed() {
-        handle_.promise().Completed();
+        return handle_.promise().Completed();
     }
 
     const T &Result() const {
@@ -142,12 +142,6 @@ public:
     }
 
     void return_value(T value) {
-        auto dependents_copy = dependets_;
-
-        for (auto &dependent : dependents_copy) {
-            dependent->RemoveDependency(GetWorkItemPtr());
-        }
-
         result_ = std::move(value);
 
         completed_ = true;
@@ -195,12 +189,6 @@ public:
     }
 
     void return_void() {
-        auto dependents_copy = dependets_;
-
-        for (auto &dependent : dependents_copy) {
-            dependent->RemoveDependency(GetWorkItemPtr());
-        }
-
         completed_ = true;
 
         OnComplete();
@@ -224,7 +212,9 @@ void zinc::core::async::Task<T>::await_suspend(
 
     dependent_promise.AddDependency(dependency_work_item_ptr);
 
-    dependency_promise.AddCompletionCallback([dependent_work_item_ptr] {
+    dependency_promise.AddCompletionCallback([dependent_work_item_ptr, dependency_work_item_ptr] {
+        dependent_work_item_ptr->RemoveDependency(dependency_work_item_ptr);
+
         if (dependent_work_item_ptr->GetDependenciesCount() != 0) {
             return;
         }
@@ -262,7 +252,9 @@ void zinc::core::async::Task<void>::await_suspend(
 
     dependent_promise.AddDependency(dependency_work_item_ptr);
 
-    dependency_promise.AddCompletionCallback([dependent_work_item_ptr] {
+    dependency_promise.AddCompletionCallback([dependent_work_item_ptr, dependency_work_item_ptr] {
+        dependent_work_item_ptr->RemoveDependency(dependency_work_item_ptr);
+
         if (dependent_work_item_ptr->GetDependenciesCount() != 0) {
             return;
         }

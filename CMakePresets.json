@@ -1,0 +1,126 @@
+{
+    "version": 8,
+    "configurePresets": [
+        {
+            "name": "SanCheck",
+            "displayName": "Sanitizers check",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_BUILD_TYPE": "Debug",
+                "ENABLE_SAN": "ON"
+            }
+        },
+        {
+            "name": "Debug",
+            "displayName": "Debug",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_BUILD_TYPE": "Debug",
+                "ENABLE_SAN": "OFF"
+            }
+        },
+        {
+            "name": "Release",
+            "displayName": "Release",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_BUILD_TYPE": "Release",
+                "ENABLE_SAN": "OFF"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "SanCheck",
+            "displayName": "Build with sanitizers check",
+            "configurePreset": "SanCheck"
+        },
+        {
+            "name": "Debug",
+            "displayName": "Build debug",
+            "configurePreset": "Debug"
+        },
+        {
+            "name": "Release",
+            "displayName": "Build release",
+            "configurePreset": "Release"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "SanCheck",
+            "displayName": "Test with sanitizers check",
+            "configurePreset": "SanCheck"
+        },
+        {
+            "name": "Debug",
+            "displayName": "Test debug",
+            "configurePreset": "Debug"
+        },
+        {
+            "name": "Release",
+            "displayName": "Test release",
+            "configurePreset": "Release"
+        }
+    ],
+    "workflowPresets": [
+    {
+      "name": "SanCheck",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "SanCheck"
+        },
+        {
+          "type": "build",
+          "name": "SanCheck"
+        },
+        {
+          "type": "test",
+          "name": "SanCheck"
+        }
+      ]
+    },{
+      "name": "Debug",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "Debug"
+        },
+        {
+          "type": "build",
+          "name": "Debug"
+        },
+        {
+          "type": "test",
+          "name": "Debug"
+        }
+      ]
+    },{
+      "name": "Release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "Release"
+        },
+        {
+          "type": "build",
+          "name": "Release"
+        },
+        {
+          "type": "test",
+          "name": "Release"
+        }
+      ]
+    }
+  ]
+}

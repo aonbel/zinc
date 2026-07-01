@@ -8,15 +8,13 @@ void zinc::core::async::WorkItem::RemoveDependency(WorkItemPtrT dependency) {
 
     dependencies_.erase(dependency);
 
-    dependency->dependets_.erase(work_item_ptr_);
+    dependency->TryDestroy(dependency);
 }
 
 void zinc::core::async::WorkItem::AddDependency(WorkItemPtrT dependency) {
     std::unique_lock lg(work_item_mtx_);
 
     dependencies_.insert(dependency);
-
-    dependency->dependets_.insert(work_item_ptr_);
 }
 
 void zinc::core::async::WorkItem::AddCompletionCallback(std::function<void()> callback) {
@@ -39,11 +37,6 @@ size_t zinc::core::async::WorkItem::GetDependenciesCount() {
     std::unique_lock lg(work_item_mtx_);
 
     return dependencies_.size();
-}
-size_t zinc::core::async::WorkItem::GetDependentsCount() {
-    std::unique_lock lg(work_item_mtx_);
-
-    return dependets_.size();
 }
 bool zinc::core::async::WorkItem::TryDestroy(WorkItemPtrT &external_ptr) {
     {
